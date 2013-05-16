@@ -13,9 +13,10 @@
 // limitations under the License.
 
 #pragma version(1)
-#pragma stateVertex(PVBackground)
-#pragma stateRaster(parent)
-#pragma stateFragment(PFBackground)
+
+#pragma rs java_package_name(com.android.magicsmoke)
+
+#include "rs_graphics.rsh"
 
 #define RSID_NOISESRC1 1
 #define RSID_NOISESRC2 2
@@ -28,95 +29,206 @@
 #define RSID_NOISEDST4 9
 #define RSID_NOISEDST5 10
 
-float xshift[5];
-float rotation[5];
-float scale[5];
-float alphafactor;
-int currentpreset;
-int lastuptime;
-float timedelta;
+// State set from java
+float gXOffset;
+float gYOffset;
+int   gPreset;
+int   gTextureMask;
+int   gRotate;
+int   gTextureSwap;
+int   gProcessTextureMode;
+int   gBackCol;
+int   gLowCol;
+int   gHighCol;
+float gAlphaMul;
+int   gPreMul;
 
-void drawCloud(float *ident, int id, int idx) {
-    float mat1[16];
-    float z = -8.f * idx;
-    matrixLoadMat(mat1,ident);
-    matrixTranslate(mat1, -State->mXOffset * 8.f * idx, -State->mTilt * idx / 3.f, 0.f);
-    matrixRotate(mat1, rotation[idx], 0.f, 0.f, 1.f);
-    vpLoadModelMatrix(mat1);
+typedef struct VertexShaderConstants_s {
+    float4 layer0;
+    float4 layer1;
+    float4 layer2;
+    float4 layer3;
+    float4 layer4;
+    float2 panoffset;
+} VertexShaderConstants;
+VertexShaderConstants *gVSConstants;
 
-    bindTexture(NAMED_PFBackground, 0, id);
-    drawQuadTexCoords(
-            -1200.0f, -1200.0f, z,        // space
-                0.f + xshift[idx], 0.f,        // texture
-            1200, -1200.0f, z,            // space
-                scale[idx] + xshift[idx], 0.f,         // texture
-            1200, 1200.0f, z,            // space
-                scale[idx] + xshift[idx], scale[idx],         // texture
-            -1200.0f, 1200.0f, z,        // space
-                0.f + xshift[idx], scale[idx]);       // texture
+typedef struct FragmentShaderConstants_s {
+    float4 clearColor;
+} FragmentShaderConstants;
+FragmentShaderConstants *gFSConstants;
+
+typedef struct VertexInputs_s {
+    float4 position;
+    float2 texture0;
+} VertexInputs;
+VertexInputs *gVS;
+
+
+rs_program_fragment gPF5tex;
+rs_program_vertex gPV5tex;
+rs_program_fragment gPF4tex;
+rs_program_vertex gPV4tex;
+
+rs_program_store gPStore;
+
+rs_allocation gTnoise1;
+rs_allocation gTnoise2;
+rs_allocation gTnoise3;
+rs_allocation gTnoise4;
+rs_allocation gTnoise5;
+
+int *gNoisesrc1;
+int *gNoisesrc2;
+int *gNoisesrc3;
+int *gNoisesrc4;
+int *gNoisesrc5;
+
+int *gNoisedst1;
+int *gNoisedst2;
+int *gNoisedst3;
+int *gNoisedst4;
+int *gNoisedst5;
+
+// Local script variables
+static float xshift[5];
+static float rotation[5];
+static float scale[5];
+static float alphafactor;
+static int currentpreset;
+static int lastuptime;
+static float timedelta;
+static float4 clearColor = {0.5f, 0.0f, 0.0f, 1.0f};
+static int countTextures()
+{
+    int pos = 0;
+    for (int i = 0; i < 5; i++)
+    {
+        if (gTextureMask & (1<<i))
+            pos++;
+    }
+    return pos;
+}
+#define rotate(s, a) \
+do { \
+    float __agl = (3.1415927f / 180.0f) * a; \
+    s.x = sin(__agl); \
+    s.y = cos(__agl); \
+} while (0)
+
+static void update()
+{
+    rs_program_vertex pv;
+    pv = gPV5tex;
+    rs_program_fragment pf;
+    pf = gPF5tex;
+
+    if (countTextures() == 4)
+    {
+        pv = gPV4tex;
+        pf = gPF4tex;
+    }
+    rsgBindProgramFragment(pf);
+    rsgBindProgramVertex(pv);
+    rsgBindProgramStore(gPStore);
+
+    rotate(gVSConstants->layer0, rotation[0]);
+    rotate(gVSConstants->layer1, rotation[1]);
+    rotate(gVSConstants->layer2, rotation[2]);
+    rotate(gVSConstants->layer3, rotation[3]);
+    rotate(gVSConstants->layer4, rotation[4]);
+
+    gVSConstants->layer0.w = xshift[0];
+    gVSConstants->layer1.w = xshift[1];
+    gVSConstants->layer2.w = xshift[2];
+    gVSConstants->layer3.w = xshift[3];
+    gVSConstants->layer4.w = xshift[4];
+
+    float m = 0.35f;
+    gVSConstants->layer0.z = m * scale[0];
+    gVSConstants->layer1.z = m * scale[1];
+    gVSConstants->layer2.z = m * scale[2];
+    gVSConstants->layer3.z = m * scale[3];
+    gVSConstants->layer4.z = m * scale[4];
+
+    gVSConstants->panoffset.x = gXOffset;
+    gVSConstants->panoffset.y = -gYOffset;
+
+    gFSConstants->clearColor = clearColor;
+
+    int pos = 0;
+    for (int i = 0; i < 5; i++)
+    {
+        if (gTextureMask & (1<<i))
+        {
+            switch (i)
+            {
+                case 0: rsgBindTexture(pf, pos, gTextureSwap != 0 ? gTnoise5 : gTnoise1); break;
+                case 1: rsgBindTexture(pf, pos, gTnoise2); break;
+                case 2: rsgBindTexture(pf, pos, gTnoise3); break;
+                case 3: rsgBindTexture(pf, pos, gTnoise4); break;
+                case 4: rsgBindTexture(pf, pos, gTnoise5); break;
+                default: break;
+            }
+            pos++;
+        }
+    }
 }
 
-void drawClouds(float* ident) {
-
-    int i;
-
-    float mat1[16];
-
-    matrixLoadMat(mat1,ident);
-
-    if (State->mRotate != 0) {
-        rotation[0] += 0.10 * timedelta;
+static void drawClouds() {
+    if (gRotate != 0)
+    {
+        rotation[0] += 0.100f * timedelta;
         rotation[1] += 0.102f * timedelta;
         rotation[2] += 0.106f * timedelta;
         rotation[3] += 0.114f * timedelta;
         rotation[4] += 0.123f * timedelta;
     }
 
-    int mask = State->mTextureMask;
+    int mask = gTextureMask;
     if (mask & 1) {
-        xshift[0] += 0.0010f * timedelta;
-        if (State->mTextureSwap != 0) {
-            drawCloud(mat1, NAMED_Tnoise5, 0);
-        } else {
-            drawCloud(mat1, NAMED_Tnoise1, 0);
-        }
+        xshift[0] += 0.00100f * timedelta;
     }
-
     if (mask & 2) {
-        xshift[1] += 0.00106 * timedelta;
-        drawCloud(mat1, NAMED_Tnoise2, 1);
+        xshift[1] += 0.00106f * timedelta;
     }
-
     if (mask & 4) {
         xshift[2] += 0.00114f * timedelta;
-        drawCloud(mat1, NAMED_Tnoise3, 2);
     }
-
     if (mask & 8) {
         xshift[3] += 0.00118f * timedelta;
-        drawCloud(mat1, NAMED_Tnoise4, 3);
     }
-
     if (mask & 16) {
         xshift[4] += 0.00127f * timedelta;
-        drawCloud(mat1, NAMED_Tnoise5, 4);
     }
 
+    update();
+
+    float z = 0;
+    rsgDrawQuad(
+        -1.0f, -1.0f, z,
+         1.0f, -1.0f, z,
+         1.0f,  1.0f, z,
+        -1.0f,  1.0f, z
+    );
+
     // Make sure the texture coordinates don't continuously increase
+    int i;
     for(i = 0; i < 5; i++) {
-        while (xshift[i] >= 1.f) {
-            xshift[i] -= 1.f;
+        if (xshift[i] > 1.f) {
+            xshift[i] -= floor(xshift[i]);
         }
     }
     // Make sure the rotation angles don't continuously increase
     for(i = 0; i < 5; i++) {
-        while (rotation[i] >= 360.f) {
-            rotation[i] -= 360.f;
+        if (rotation[i] > 360.f) {
+            float multiplier = floor(rotation[i]/360.f);
+            rotation[i] -= 360.f * multiplier;
         }
     }
 }
 
-int premul(int rgb, int a) {
+static int premul(int rgb, int a) {
     int r = (rgb >> 16) * a + 1;
     r = (r + (r >> 8)) >> 8;
     int g = ((rgb >> 8) & 0xff) * a + 1;
@@ -126,18 +238,19 @@ int premul(int rgb, int a) {
     return r << 16 | g << 8 | b;
 }
 
-void makeTexture(int *src, int *dst, int rsid) {
-    
+
+static void makeTexture(int *src, int *dst, rs_allocation rsid) {
+
     int x;
     int y;
-    int pm = State->mPreMul;
+    int pm = gPreMul;
 
-    if (State->mProcessTextureMode == 1) {
-        int lowcol = State->mLowCol;
-        int highcol = State->mHighCol;
-        
+    if (gProcessTextureMode == 1) {
+        int lowcol = gLowCol;
+        int highcol = gHighCol;
+
         for (y=0;y<256;y++) {
-            for (x=0;x<256;x++) { 
+            for (x=0;x<256;x++) {
                 int pix = src[y*256+x];
                 int lum = pix & 0x00ff;
                 int newpix;
@@ -159,14 +272,14 @@ void makeTexture(int *src, int *dst, int rsid) {
                 dst[y*256+x] = newpix;
             }
         }
-        alphafactor *= State->mAlphaMul;
-    } else if (State->mProcessTextureMode == 2) {
-        int lowcol = State->mLowCol;
-        int highcol = State->mHighCol;
+        alphafactor *= gAlphaMul;
+    } else if (gProcessTextureMode == 2) {
+        int lowcol = gLowCol;
+        int highcol = gHighCol;
         float scale = 255.f / (255.f - lowcol);
-        
+
         for (y=0;y<256;y++) {
-            for (x=0;x<256;x++) { 
+            for (x=0;x<256;x++) {
                 int pix = src[y*256+x];
                 int alpha = pix & 0x00ff;
                 if (alpha < lowcol) {
@@ -183,14 +296,14 @@ void makeTexture(int *src, int *dst, int rsid) {
                 dst[y*256+x] = newpix;
             }
         }
-        alphafactor *= State->mAlphaMul;
-    } else if (State->mProcessTextureMode == 3) {
-        int lowcol = State->mLowCol;
-        int highcol = State->mHighCol;
+        alphafactor *= gAlphaMul;
+    } else if (gProcessTextureMode == 3) {
+        int lowcol = gLowCol;
+        int highcol = gHighCol;
         float scale = 255.f / (255.f - lowcol);
-        
+
         for (y=0;y<256;y++) {
-            for (x=0;x<256;x++) { 
+            for (x=0;x<256;x++) {
                 int pix = src[y*256+x];
                 int lum = pix & 0x00ff;
                 int newpix;
@@ -214,9 +327,8 @@ void makeTexture(int *src, int *dst, int rsid) {
                 dst[y*256+x] = newpix;
             }
         }
-        alphafactor *= State->mAlphaMul;
+        alphafactor *= gAlphaMul;
     } else {
-
         for (y=0;y<256;y++) {
             for (x=0;x<256;x++) {
                 int rgb = *src++;
@@ -229,33 +341,25 @@ void makeTexture(int *src, int *dst, int rsid) {
             }
         }
     }
-    uploadToTexture(rsid, 0);
+
+    rsgAllocationSyncAll(rsid);
 }
 
-void makeTextures() {
-    debugI32("makeTextures", State->mPreset);
+static void makeTextures() {
     alphafactor = 1.f;
-    makeTexture((int*)noisesrc1, (int*)noisedst1, NAMED_Tnoise1);
-    makeTexture((int*)noisesrc2, (int*)noisedst2, NAMED_Tnoise2);
-    makeTexture((int*)noisesrc3, (int*)noisedst3, NAMED_Tnoise3);
-    makeTexture((int*)noisesrc4, (int*)noisedst4, NAMED_Tnoise4);
-    makeTexture((int*)noisesrc5, (int*)noisedst5, NAMED_Tnoise5);
+    makeTexture((int*)gNoisesrc1, (int*)gNoisedst1, gTnoise1);
+    makeTexture((int*)gNoisesrc2, (int*)gNoisedst2, gTnoise2);
+    makeTexture((int*)gNoisesrc3, (int*)gNoisedst3, gTnoise3);
+    makeTexture((int*)gNoisesrc4, (int*)gNoisedst4, gTnoise4);
+    makeTexture((int*)gNoisesrc5, (int*)gNoisedst5, gTnoise5);
 }
-
-
-
-struct color {
-    float r;
-    float g;
-    float b;
-};
 
 void init() {
-    int i;
-    for (i=0;i<4;i++) {
+    for (int i=0;i<5;i++) {
         xshift[i] = 0.f;
         rotation[i] = 360.f * i / 5.f;
     }
+
     scale[0] = 4.0f; // changed below based on preset
     scale[1] = 3.0f;
     scale[2] = 3.4f;
@@ -263,29 +367,15 @@ void init() {
     scale[4] = 4.2f;
 
     currentpreset = -1;
-    lastuptime = uptimeMillis();
+    lastuptime = (int)rsUptimeMillis();
     timedelta = 0;
 }
 
 
-int main(int launchID) {
-
+int root(void) {
     int i;
-    float ident[16];
-    float masterscale = 0.0041f;// / (State->mXOffset * 4.f + 1.f);
-    matrixLoadIdentity(ident);
-    matrixTranslate(ident, -State->mXOffset, 0.f, 0.f);
-    matrixScale(ident, masterscale, masterscale, masterscale);
-    //matrixRotate(ident, 0.f, 0.f, 0.f, 1.f);
-    matrixRotate(ident, -State->mTilt, 1.f, 0.f, 0.f);
 
-    if (State->mBlendFunc) {
-        bindProgramStore(NAMED_PFSBackgroundOne);
-    } else {
-        bindProgramStore(NAMED_PFSBackgroundSrc);
-    }
-
-    int now = uptimeMillis();
+    int now = (int)rsUptimeMillis();
     timedelta = ((float)(now - lastuptime)) / 44.f;
     lastuptime = now;
     if (timedelta > 3) {
@@ -294,24 +384,21 @@ int main(int launchID) {
         timedelta = 3;
     }
 
-    i = State->mPreset;
+    i = gPreset;
     if (i != currentpreset) {
         currentpreset = i;
-        int rgb = State->mBackCol;
-        pfClearColor(
-            ((float)((rgb >> 16)  & 0xff)) / 255.0f,
-            ((float)((rgb >> 8)  & 0xff)) / 255.0f,
-            ((float)(rgb & 0xff)) / 255.0f,
-            1.0f);
+        clearColor.x = ((float)((gBackCol >> 16)  & 0xff)) / 255.0f;
+        clearColor.y = ((float)((gBackCol >> 8)  & 0xff)) / 255.0f;
+        clearColor.z = ((float)(gBackCol & 0xff)) / 255.0f;
         makeTextures();
     }
 
-    if (State->mTextureSwap != 0) {
+    if (gTextureSwap != 0) {
         scale[0] = .25f;
     } else {
         scale[0] = 4.f;
     }
-    drawClouds(ident);
+    drawClouds();
 
     return 55;
 }

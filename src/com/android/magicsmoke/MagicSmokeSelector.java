@@ -73,12 +73,6 @@ public class MagicSmokeSelector extends Activity {
         }
     }
     
-    // button hook
-    public void setLiveWallpaper(View v) {
-        finish();
-    }
-
-
     @Override
     public void onResume() {
         super.onResume();
@@ -227,6 +221,9 @@ public class MagicSmokeSelector extends Activity {
         
         public ParcelFileDescriptor setWallpaper(String name) {
             return null;
+        }
+
+        public void engineShown(IWallpaperEngine engine) throws RemoteException {
         }
     }
 }

@@ -29,22 +29,13 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.media.MediaPlayer;
 import android.os.Handler;
-import android.renderscript.Allocation;
-import android.renderscript.Dimension;
-import android.renderscript.Element;
-import android.renderscript.Primitive;
-import android.renderscript.ProgramFragment;
-import android.renderscript.ProgramStore;
-import android.renderscript.ProgramVertex;
-import android.renderscript.Sampler;
-import android.renderscript.ScriptC;
-import android.renderscript.SimpleMesh;
-import android.renderscript.Type;
+import android.renderscript.*;
 import android.renderscript.Element.Builder;
 import android.renderscript.ProgramStore.BlendDstFunc;
 import android.renderscript.ProgramStore.BlendSrcFunc;
 import android.util.Log;
 import android.view.MotionEvent;
+import android.os.Bundle;
 
 import java.util.TimeZone;
 
@@ -52,7 +43,7 @@ class MagicSmokeRS extends RenderScriptScene implements OnSharedPreferenceChange
 
     static class WorldState {
         public float mXOffset;
-        public float mTilt;
+        public float mYOffset;
         public int   mPreset;
         public int   mTextureMask;
         public int   mRotate;
@@ -63,21 +54,26 @@ class MagicSmokeRS extends RenderScriptScene implements OnSharedPreferenceChange
         public int   mHighCol;
         public float mAlphaMul;
         public int   mPreMul;
-        public int   mBlendFunc;
     }
     WorldState mWorldState = new WorldState();
-    private Type mStateType;
-    private Allocation mState;
+    //private Type mStateType;
+    //private Allocation mState;
 
-    private ProgramStore mPfsBackgroundOne;
-    private ProgramStore mPfsBackgroundSrc;
-    private ProgramFragment mPfBackground;
-    private Sampler mSampler;
+    private ProgramStore mPStore;
+    private ProgramFragment mPF5tex;
+    private ProgramFragment mPF4tex;
+    private Sampler[] mSampler;
     private Allocation[] mSourceTextures;
     private Allocation[] mRealTextures;
 
-    private ProgramVertex mPVBackground;
-    private ProgramVertex.MatrixAllocation mPVAlloc;
+    private ScriptC_clouds mScript;
+
+    private ScriptField_VertexShaderConstants_s mVSConst;
+    private ScriptField_FragmentShaderConstants_s mFSConst;
+
+    private ProgramVertex mPV5tex;
+    private ProgramVertex mPV4tex;
+    private ProgramVertexFixedFunction.Constants mPVAlloc;
 
     private static final int RSID_STATE = 0;
     //private static final int RSID_PROGRAMVERTEX = 3;
@@ -97,7 +93,7 @@ class MagicSmokeRS extends RenderScriptScene implements OnSharedPreferenceChange
 
     static class Preset {
         Preset(int processmode, int backcol, int locol, int hicol, float mul, int mask,
-                 boolean rot, int blend, boolean texswap, boolean premul) {
+                 boolean rot, boolean texswap, boolean premul) {
             mProcessTextureMode = processmode;
             mBackColor = backcol;
             mLowColor = locol;
@@ -105,7 +101,6 @@ class MagicSmokeRS extends RenderScriptScene implements OnSharedPreferenceChange
             mAlphaMul = mul;
             mTextureMask = mask;
             mRotate = rot;
-            mBlendFunc = blend;
             mTextureSwap = texswap;
             mPreMul = premul;
         }
@@ -116,34 +111,33 @@ class MagicSmokeRS extends RenderScriptScene implements OnSharedPreferenceChange
         public float mAlphaMul;
         public int mTextureMask;
         public boolean mRotate;
-        public int mBlendFunc;
         public boolean mTextureSwap;
         public boolean mPreMul;
     }
 
-    public static final int DEFAULT_PRESET = 4;
+    public static final int DEFAULT_PRESET = 16;
     public static final Preset [] mPreset = new Preset[] {
-        //       proc    back     low       high     alph  mask  rot  blend  swap premul
-        new Preset(1,  0x000000, 0x000000, 0xffffff, 2.0f, 0x0f, true,  0, false, false),
-        new Preset(1,  0x0000ff, 0x000000, 0xffffff, 2.0f, 0x0f, true,  0, false, false),
-        new Preset(1,  0x00ff00, 0x000000, 0xffffff, 2.0f, 0x0f, true,  0, false, false),
-        new Preset(1,  0x00ff00, 0x000000, 0xffffff, 2.0f, 0x0f, true,  0, false, true),
-        new Preset(1,  0x00ff00, 0x00ff00, 0xffffff, 2.5f, 0x1f, true,  0, true, true),
-        new Preset(1,  0x800000, 0xff0000, 0xffffff, 2.5f, 0x1f, true,  0, true,  false),
-        new Preset(0,  0x000000, 0x000000, 0xffffff, 0.0f, 0x1f, true,  0, false, false),
-        new Preset(1,  0x0000ff, 0x00ff00, 0xffff00, 2.0f, 0x1f, true,  0, true,  false),
-        new Preset(1,  0x008000, 0x00ff00, 0xffffff, 2.5f, 0x1f, true,  0, true,  false),
-        new Preset(1,  0x800000, 0xff0000, 0xffffff, 2.5f, 0x1f, true,  0, true, true),
-        new Preset(1,  0x808080, 0x000000, 0xffffff, 2.0f, 0x0f, true,  0, false, true),
-        new Preset(1,  0x0000ff, 0x000000, 0xffffff, 2.0f, 0x0f, true,  0, false, true),
-        new Preset(1,  0x0000ff, 0x00ff00, 0xffff00, 1.5f, 0x1f, false, 0, false, true),
-        new Preset(1,  0x0000ff, 0x00ff00, 0xffff00, 2.0f, 0x1f, true,  0, true, true),
-        new Preset(1,  0x0000ff, 0x00ff00, 0xffff00, 1.5f, 0x1f, true,  0, true, true),
-        new Preset(1,  0x808080, 0x000000, 0xffffff, 2.0f, 0x0f, true,  0, false, false),
-        new Preset(1,  0x000000, 0x000000, 0xffffff, 2.0f, 0x0f, true,  0, true, false),
-        new Preset(2,  0x000000, 0x000070, 0xff2020, 2.5f, 0x1f, true,  0, false, false),
-        new Preset(2,  0x6060ff, 0x000070, 0xffffff, 2.5f, 0x1f, true,  0, false, false),
-        new Preset(3,  0x0000f0, 0x000000, 0xffffff, 2.0f, 0x0f, true,  0, true, false),
+        //       proc    back     low       high     alph  mask  rot    swap   premul
+        new Preset(1,  0x000000, 0x000000, 0xffffff, 2.0f, 0x0f, true,  false, false),
+        new Preset(1,  0x0000ff, 0x000000, 0xffffff, 2.0f, 0x0f, true,  false, false),
+        new Preset(1,  0x00ff00, 0x000000, 0xffffff, 2.0f, 0x0f, true,  false, false),
+        new Preset(1,  0x00ff00, 0x000000, 0xffffff, 2.0f, 0x0f, true,  false, true),
+        new Preset(1,  0x00ff00, 0x00ff00, 0xffffff, 2.5f, 0x1f, true,  true,  true),
+        new Preset(1,  0x800000, 0xff0000, 0xffffff, 2.5f, 0x1f, true,  true,  false),
+        new Preset(0,  0x000000, 0x000000, 0xffffff, 0.0f, 0x1f, true,  false, false),
+        new Preset(1,  0x0000ff, 0x00ff00, 0xffff00, 2.0f, 0x1f, true,  true,  false),
+        new Preset(1,  0x008000, 0x00ff00, 0xffffff, 2.5f, 0x1f, true,  true,  false),
+        new Preset(1,  0x800000, 0xff0000, 0xffffff, 2.5f, 0x1f, true,  true,  true),
+        new Preset(1,  0x808080, 0x000000, 0xffffff, 2.0f, 0x0f, true,  false, true),
+        new Preset(1,  0x0000ff, 0x000000, 0xffffff, 2.0f, 0x0f, true,  false, true),
+        new Preset(1,  0x0000ff, 0x00ff00, 0xffff00, 1.5f, 0x1f, false, false, true),
+        new Preset(1,  0x0000ff, 0x00ff00, 0xffff00, 2.0f, 0x1f, true,  true,  true),
+        new Preset(1,  0x0000ff, 0x00ff00, 0xffff00, 1.5f, 0x1f, true,  true,  true),
+        new Preset(1,  0x808080, 0x000000, 0xffffff, 2.0f, 0x0f, true,  false, false),
+        new Preset(1,  0x000000, 0x000000, 0xffffff, 2.0f, 0x0f, true,  true,  false),
+        new Preset(2,  0x000000, 0x000070, 0xff2020, 2.5f, 0x1f, true,  false, false),
+        new Preset(2,  0x6060ff, 0x000070, 0xffffff, 2.5f, 0x1f, true,  false, false),
+        new Preset(3,  0x0000f0, 0x000000, 0xffffff, 2.0f, 0x0f, true,  true,  false),
     };
 
     private float mTouchY;
@@ -152,16 +146,21 @@ class MagicSmokeRS extends RenderScriptScene implements OnSharedPreferenceChange
         super(width, height);
         mWidth = width;
         mHeight = height;
-        mWorldState.mTilt = 0;
         mContext = context;
         mSharedPref = mContext.getSharedPreferences("magicsmoke", Context.MODE_PRIVATE);
+        mSharedPref.registerOnSharedPreferenceChangeListener(this);
         makeNewState();
     }
 
     public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
 
-        makeNewState();
-        mState.data(mWorldState);
+        if (!mIsStarted) {
+            start();
+            mRS.finish();
+            stop(false);
+        } else {
+            makeNewState();
+        }
     }
 
     void makeNewState() {
@@ -179,18 +178,42 @@ class MagicSmokeRS extends RenderScriptScene implements OnSharedPreferenceChange
         mWorldState.mHighCol = mPreset[p].mHighColor;
         mWorldState.mAlphaMul = mPreset[p].mAlphaMul;
         mWorldState.mPreMul = mPreset[p].mPreMul ? 1 : 0;
-        mWorldState.mBlendFunc = mPreset[p].mBlendFunc;
+
+        if(mScript != null) {
+            mScript.set_gPreset(mWorldState.mPreset);
+            mScript.set_gTextureMask(mWorldState.mTextureMask);
+            mScript.set_gRotate(mWorldState.mRotate);
+            mScript.set_gTextureSwap(mWorldState.mTextureSwap);
+            mScript.set_gProcessTextureMode(mWorldState.mProcessTextureMode);
+            mScript.set_gBackCol(mWorldState.mBackCol);
+            mScript.set_gLowCol(mWorldState.mLowCol);
+            mScript.set_gHighCol(mWorldState.mHighCol);
+            mScript.set_gAlphaMul(mWorldState.mAlphaMul);
+            mScript.set_gPreMul(mWorldState.mPreMul);
+        }
     }
 
     @Override
     public void resize(int width, int height) {
         super.resize(width, height);
         if (mPVAlloc != null) {
-            mPVAlloc.setupProjectionNormalized(width, height);
+            Matrix4f proj = new Matrix4f();
+            proj.loadProjectionNormalized(width, height);
+            mPVAlloc.setProjection(proj);
         }
     }
 
     @Override
+    public Bundle onCommand(String action, int x, int y, int z, Bundle extras,
+            boolean resultRequested) {
+
+        if ("android.wallpaper.tap".equals(action)) {
+            mTouchY = y;
+        }
+        return null;
+    }
+
+    /*@Override
     public void onTouchEvent(MotionEvent event) {
         switch(event.getAction()) {
             case MotionEvent.ACTION_DOWN:
@@ -200,37 +223,36 @@ class MagicSmokeRS extends RenderScriptScene implements OnSharedPreferenceChange
                 float dy = event.getY() - mTouchY;
                 mTouchY += dy;
                 dy /= 20;
-                dy += mWorldState.mTilt;
                 if (dy > 4) {
                     dy = 4;
                 } else if (dy < -4) {
                     dy = -4;
                 }
-                mWorldState.mTilt = dy;
-                mState.data(mWorldState);
+                //mState.data(mWorldState);
         }
-    }
+    }*/
 
     @Override
-    public void setOffset(float xOffset, float yOffset, float xStep, float yStep,
-            int xPixels, int yPixels) {
+    public void setOffset(float xOffset, float yOffset, float xStep, float yStep, int xPixels, int yPixels) {
         // update our state, then push it to the renderscript
         mWorldState.mXOffset = xOffset;
-        mState.data(mWorldState);
+        mWorldState.mYOffset = yOffset;
+        mScript.set_gXOffset(mWorldState.mXOffset);
+        mScript.set_gYOffset(mWorldState.mYOffset);
     }
 
     @Override
-    public void stop() {
-        mSharedPref.unregisterOnSharedPreferenceChangeListener(this);
-        super.stop();
+    public void stop(boolean forReal) {
+        if (forReal) {
+            mSharedPref.unregisterOnSharedPreferenceChangeListener(this);
+        }
+        super.stop(forReal);
     }
 
     @Override
     public void start() {
-        super.start();
-        mSharedPref.registerOnSharedPreferenceChangeListener(this);
         makeNewState();
-        mState.data(mWorldState);
+        super.start();
     }
 
     float alphafactor;
@@ -241,13 +263,27 @@ class MagicSmokeRS extends RenderScriptScene implements OnSharedPreferenceChange
         opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
         Bitmap in = BitmapFactory.decodeResource(mResources, id, opts);
 
+        // Bitmaps are stored in memory in premultiplied form. We want non-premultiplied,
+        // which is what getPixels gives us.
         int pixels[] = new int[65536];
         in.getPixels(pixels, 0, 256, 0, 0, 256, 256);
-        mRealTextures[index] = Allocation.createTyped(mRS, mTextureType);
-        mSourceTextures[index] = Allocation.createTyped(mRS, mTextureType);
-        mSourceTextures[index].setName(name+"_src");
-        mSourceTextures[index].data(pixels);
-        mRealTextures[index].setName(name);
+        mRealTextures[index] = Allocation.createTyped(mRS, mTextureType,
+                                                      Allocation.MipmapControl.MIPMAP_NONE,
+                                                      Allocation.USAGE_SCRIPT |
+                                                      Allocation.USAGE_GRAPHICS_TEXTURE);
+        mSourceTextures[index] = Allocation.createTyped(mRS, mTextureType,
+                                                      Allocation.MipmapControl.MIPMAP_NONE,
+                                                      Allocation.USAGE_SCRIPT);
+
+        // copyFrom needs a byte[], not an int[], so we need to copy the data first
+        byte bpixels[] = new byte[65536*4];
+        for (int i = 0; i < 65536; i++) {
+            bpixels[i * 4 + 0] = (byte)(pixels[i] & 0xff);
+            bpixels[i * 4 + 1] = (byte)((pixels[i] >> 8) & 0xff);
+            bpixels[i * 4 + 2] = (byte)((pixels[i] >>16) & 0xff);
+            bpixels[i * 4 + 3] = (byte)((pixels[i] >> 24) & 0xff);
+        }
+        mSourceTextures[index].copyFrom(bpixels);
         in.recycle();
     }
 
@@ -265,101 +301,123 @@ class MagicSmokeRS extends RenderScriptScene implements OnSharedPreferenceChange
         loadBitmap(R.drawable.noise3, 2, "Tnoise3", alphamul, lowcol, highcol);
         loadBitmap(R.drawable.noise4, 3, "Tnoise4", alphamul, lowcol, highcol);
         loadBitmap(R.drawable.noise5, 4, "Tnoise5", alphamul, lowcol, highcol);
+
+        mScript.set_gTnoise1(mRealTextures[0]);
+        mScript.set_gTnoise2(mRealTextures[1]);
+        mScript.set_gTnoise3(mRealTextures[2]);
+        mScript.set_gTnoise4(mRealTextures[3]);
+        mScript.set_gTnoise5(mRealTextures[4]);
+
+        mScript.bind_gNoisesrc1(mSourceTextures[0]);
+        mScript.bind_gNoisesrc2(mSourceTextures[1]);
+        mScript.bind_gNoisesrc3(mSourceTextures[2]);
+        mScript.bind_gNoisesrc4(mSourceTextures[3]);
+        mScript.bind_gNoisesrc5(mSourceTextures[4]);
+
+        mScript.bind_gNoisedst1(mRealTextures[0]);
+        mScript.bind_gNoisedst2(mRealTextures[1]);
+        mScript.bind_gNoisedst3(mRealTextures[2]);
+        mScript.bind_gNoisedst4(mRealTextures[3]);
+        mScript.bind_gNoisedst5(mRealTextures[4]);
     }
 
     @Override
     protected ScriptC createScript() {
 
-        // Create a renderscript type from a java class. The specified name doesn't
-        // really matter; the name by which we refer to the object in RenderScript
-        // will be specified later.
-        mStateType = Type.createFromClass(mRS, WorldState.class, 1, "WorldState");
-        // Create an allocation from the type we just created.
-        mState = Allocation.createTyped(mRS, mStateType);
-        mState.data(mWorldState);
+        mScript = new ScriptC_clouds(mRS, mResources, R.raw.clouds);
 
-        // First set up the coordinate system and such
-        ProgramVertex.Builder pvb = new ProgramVertex.Builder(mRS, null, null);
-        mPVBackground = pvb.create();
-        mPVBackground.setName("PVBackground");
-        mPVAlloc = new ProgramVertex.MatrixAllocation(mRS);
-        mPVBackground.bindAllocation(mPVAlloc);
-        mPVAlloc.setupProjectionNormalized(mWidth, mHeight);
+        mVSConst = new ScriptField_VertexShaderConstants_s(mRS, 1);
+        mScript.bind_gVSConstants(mVSConst);
+
+        {
+            ProgramVertex.Builder builder = new ProgramVertex.Builder(mRS);
+            builder.setShader(mResources, R.raw.pv5tex);
+            builder.addConstant(mVSConst.getAllocation().getType());
+            builder.addInput(ScriptField_VertexInputs_s.createElement(mRS));
+
+            mPV5tex = builder.create();
+            mPV5tex.bindConstants(mVSConst.getAllocation(), 0);
+
+            builder.setShader(mResources, R.raw.pv4tex);
+            mPV4tex = builder.create();
+            mPV4tex.bindConstants(mVSConst.getAllocation(), 0);
+        }
+        mScript.set_gPV5tex(mPV5tex);
+        mScript.set_gPV4tex(mPV4tex);
 
         mSourceTextures = new Allocation[5];
         mRealTextures = new Allocation[5];
 
         Type.Builder tb = new Type.Builder(mRS, Element.RGBA_8888(mRS));
-        tb.add(Dimension.X, 256);
-        tb.add(Dimension.Y, 256);
+        tb.setX(256);
+        tb.setY(256);
         mTextureType = tb.create();
         loadBitmaps();
 
         Sampler.Builder samplerBuilder = new Sampler.Builder(mRS);
-        samplerBuilder.setMin(LINEAR);
-        samplerBuilder.setMag(LINEAR);
+        samplerBuilder.setMinification(LINEAR);
+        samplerBuilder.setMagnification(LINEAR);
         samplerBuilder.setWrapS(WRAP);
         samplerBuilder.setWrapT(WRAP);
-        mSampler = samplerBuilder.create();
+        mSampler = new Sampler[5];
+        for (int i = 0; i < 5; i++)
+            mSampler[i] = samplerBuilder.create();
 
         {
+            mFSConst = new ScriptField_FragmentShaderConstants_s(mRS, 1);
+            mScript.bind_gFSConstants(mFSConst);
+
             ProgramFragment.Builder builder = new ProgramFragment.Builder(mRS);
-            builder.setTexture(ProgramFragment.Builder.EnvMode.REPLACE,
-                               ProgramFragment.Builder.Format.RGBA, 0);
-            mPfBackground = builder.create();
-            mPfBackground.setName("PFBackground");
-            mPfBackground.bindSampler(mSampler, 0);
+            builder.setShader(mResources, R.raw.pf5tex);
+            for (int texCount = 0; texCount < 5; texCount ++) {
+                builder.addTexture(Program.TextureType.TEXTURE_2D);
+            }
+            builder.addConstant(mFSConst.getAllocation().getType());
+
+            mPF5tex = builder.create();
+            for (int i = 0; i < 5; i++)
+                mPF5tex.bindSampler(mSampler[i], i);
+            mPF5tex.bindConstants(mFSConst.getAllocation(), 0);
+
+            builder = new ProgramFragment.Builder(mRS);
+            builder.setShader(mResources, R.raw.pf4tex);
+            for (int texCount = 0; texCount < 4; texCount ++) {
+                builder.addTexture(Program.TextureType.TEXTURE_2D);
+            }
+            builder.addConstant(mFSConst.getAllocation().getType());
+            mPF4tex = builder.create();
+            for (int i = 0; i < 4; i++)
+                mPF4tex.bindSampler(mSampler[i], i);
+            mPF4tex.bindConstants(mFSConst.getAllocation(), 0);
         }
+
+        mScript.set_gPF5tex(mPF5tex);
+        mScript.set_gPF4tex(mPF4tex);
+
 
         {
-            ProgramStore.Builder builder = new ProgramStore.Builder(mRS, null, null);
-            builder.setDepthFunc(ProgramStore.DepthFunc.EQUAL);
-            builder.setBlendFunc(BlendSrcFunc.ONE, BlendDstFunc.ONE_MINUS_SRC_ALPHA);
-            builder.setDitherEnable(true); // without dithering there is severe banding
-            builder.setDepthMask(false);
-            mPfsBackgroundOne = builder.create();
-            mPfsBackgroundOne.setName("PFSBackgroundOne");
-            builder.setBlendFunc(BlendSrcFunc.SRC_ALPHA, BlendDstFunc.ONE_MINUS_SRC_ALPHA);
-            mPfsBackgroundSrc = builder.create();
-            mPfsBackgroundSrc.setName("PFSBackgroundSrc");
+            ProgramStore.Builder builder = new ProgramStore.Builder(mRS);
+            builder.setDepthFunc(ProgramStore.DepthFunc.ALWAYS);
+            builder.setBlendFunc(BlendSrcFunc.ONE, BlendDstFunc.ZERO);
+            builder.setDitherEnabled(true); // without dithering there is severe banding
+            builder.setDepthMaskEnabled(false);
+            mPStore = builder.create();
         }
 
-        // Time to create the script
-        ScriptC.Builder sb = new ScriptC.Builder(mRS);
-        // Specify the name by which to refer to the WorldState object in the
-        // renderscript.
-        sb.setType(mStateType, "State", RSID_STATE);
-        sb.setType(mTextureType, "noisesrc1", RSID_NOISESRC1);
-        sb.setType(mTextureType, "noisedst1", RSID_NOISEDST1);
-        sb.setType(mTextureType, "noisesrc2", RSID_NOISESRC2);
-        sb.setType(mTextureType, "noisedst2", RSID_NOISEDST2);
-        sb.setType(mTextureType, "noisesrc3", RSID_NOISESRC3);
-        sb.setType(mTextureType, "noisedst3", RSID_NOISEDST3);
-        sb.setType(mTextureType, "noisesrc4", RSID_NOISESRC4);
-        sb.setType(mTextureType, "noisedst4", RSID_NOISEDST4);
-        sb.setType(mTextureType, "noisesrc5", RSID_NOISESRC5);
-        sb.setType(mTextureType, "noisedst5", RSID_NOISEDST5);
-        sb.setScript(mResources, R.raw.clouds);
-        sb.setRoot(true);
+        mScript.set_gPStore(mPStore);
 
-        ScriptC script = sb.create();
-        script.setClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        script.setTimeZone(TimeZone.getDefault().getID());
+        mScript.set_gPreset(mWorldState.mPreset);
+        mScript.set_gTextureMask(mWorldState.mTextureMask);
+        mScript.set_gRotate(mWorldState.mRotate);
+        mScript.set_gTextureSwap(mWorldState.mTextureSwap);
+        mScript.set_gProcessTextureMode(mWorldState.mProcessTextureMode);
+        mScript.set_gBackCol(mWorldState.mBackCol);
+        mScript.set_gLowCol(mWorldState.mLowCol);
+        mScript.set_gHighCol(mWorldState.mHighCol);
+        mScript.set_gAlphaMul(mWorldState.mAlphaMul);
+        mScript.set_gPreMul(mWorldState.mPreMul);
+        mScript.set_gXOffset(mWorldState.mXOffset);
 
-        script.bindAllocation(mState, RSID_STATE);
-        script.bindAllocation(mSourceTextures[0], RSID_NOISESRC1);
-        script.bindAllocation(mRealTextures[0], RSID_NOISEDST1);
-        script.bindAllocation(mSourceTextures[1], RSID_NOISESRC2);
-        script.bindAllocation(mRealTextures[1], RSID_NOISEDST2);
-        script.bindAllocation(mSourceTextures[2], RSID_NOISESRC3);
-        script.bindAllocation(mRealTextures[2], RSID_NOISEDST3);
-        script.bindAllocation(mSourceTextures[3], RSID_NOISESRC4);
-        script.bindAllocation(mRealTextures[3], RSID_NOISEDST4);
-        script.bindAllocation(mSourceTextures[4], RSID_NOISESRC5);
-        script.bindAllocation(mRealTextures[4], RSID_NOISEDST5);
-        //script.bindAllocation(mPVAlloc.mAlloc, RSID_PROGRAMVERTEX);
-
-
-        return script;
+        return mScript;
     }
 }

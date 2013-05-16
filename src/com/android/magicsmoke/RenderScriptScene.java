@@ -18,14 +18,16 @@
 package com.android.magicsmoke;
 
 import android.content.res.Resources;
+import android.os.Bundle;
 import android.renderscript.RenderScriptGL;
 import android.renderscript.ScriptC;
-import android.view.MotionEvent;
+//import android.view.MotionEvent;
 
 public abstract class RenderScriptScene {
     protected int mWidth;
     protected int mHeight;
     protected boolean mPreview;
+    protected boolean mIsStarted;
     protected Resources mResources;
     protected RenderScriptGL mRS;
     protected ScriptC mScript;
@@ -68,12 +70,14 @@ public abstract class RenderScriptScene {
 
     protected abstract ScriptC createScript();
 
-    public void stop() {
-        mRS.contextBindRootScript(null);
+    public void stop(boolean forReal) {
+        mRS.bindRootScript(null);
+        mIsStarted = false;
     }
 
     public void start() {
-        mRS.contextBindRootScript(mScript);
+        mRS.bindRootScript(mScript);
+        mIsStarted = true;
     }
 
     public void resize(int width, int height) {
@@ -82,10 +86,12 @@ public abstract class RenderScriptScene {
     }
 
     @SuppressWarnings({"UnusedDeclaration"})
-    public void setOffset(float xOffset, float yOffset,
-            float xStep, float yStep, int xPixels, int yPixels) {
-    }
-    public void onTouchEvent(MotionEvent event) {
+    public void setOffset(float xOffset, float yOffset, float xStep, float yStep, int xPixels, int yPixels) {
     }
 
+    @SuppressWarnings({"UnusedDeclaration"})
+    public Bundle onCommand(String action, int x, int y, int z, Bundle extras,
+            boolean resultRequested) {
+        return null;
+    }
 }
